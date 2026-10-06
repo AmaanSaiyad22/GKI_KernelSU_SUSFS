@@ -540,6 +540,31 @@ jobs:
       with:
         version: ${{ inputs.version }}
         allow_version_mismatch: true
+        
+    - name: Diagnose SukiSU exec hook mismatch
+      if: inputs.root_flavor == 'sukisu-ultra'
+      shell: bash
+      run: |
+        echo "=== fs/exec.c around failing line ==="
+        EXEC="$(find "${{ github.workspace }}/kernel" -path '*/fs/exec.c' -print -quit)"
+        echo "Using: $EXEC"
+        nl -ba "$EXEC" | sed -n '1995,2030p'
+
+        echo
+        echo "=== SukiSU exec hook references ==="
+        grep -R -n -E \
+          "ksu_handle_(post_)?execveat_sucompat|ksu_handle_execveat_sucompat" \
+          "${{ github.workspace }}/kernel" 2>/dev/null || true
+
+        echo
+        echo "=== sucompat.h ==="
+        SUH="$(find "${{ github.workspace }}/kernel" -path '*/sucompat.h' -print -quit)"
+        echo "Using: $SUH"
+        nl -ba "$SUH" | sed -n '1,50p'
+
+        echo
+        echo "=== Diagnostic complete ==="
+        exit 1
 
     - name: Build Normal Kernel
       env:
