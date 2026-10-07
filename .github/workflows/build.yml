@@ -284,7 +284,7 @@ jobs:
         # SukiSU-Ultra Android 14 / 6.1 uses the verified compatible SUSFS pin.
         elif [ "${{ inputs.root_flavor }}" = "sukisu-ultra" ] &&
              [ "${{ inputs.version }}" = "android14-6.1" ]; then
-          SUSFS_COMMIT="24743360ea08d98f6ad72b856851abed8de5854f"
+          SUSFS_COMMIT="ad0c6ce81fb67b67e64fc6d8a1bc8c0970e3438d"
           echo "SukiSU-Ultra android14-6.1: using verified SUSFS commit ${SUSFS_COMMIT}"
 
         else
