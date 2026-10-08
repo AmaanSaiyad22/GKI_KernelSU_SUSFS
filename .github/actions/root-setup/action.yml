@@ -1,25 +1,32 @@
-name: Setup pinned root implementation
-description: Clone exactly one supported root implementation at a verified commit
+```yaml
+name: Root setup
+
+description: Configure the selected root implementation
+
 inputs:
   flavor:
-    description: 'kernelsu, next, resukisu, sukisu-ultra, or kowsu'
+    description: Root implementation
     required: true
-  commit:
-    description: 'Full immutable commit SHA'
+  root_commit:
+    description: Root implementation commit
+    required: true
+  source_dir:
+    description: Kernel source directory
     required: true
 
 runs:
   using: composite
   steps:
-    - name: Clone and integrate selected root
+    - name: Resolve root implementation
       shell: bash
-      working-directory: ${{ github.workspace }}/kernel
+      working-directory: ${{ inputs.source_dir }}
+      env:
+        FLAVOR: ${{ inputs.flavor }}
+        EXPECTED_COMMIT: ${{ inputs.root_commit }}
       run: |
         set -euo pipefail
 
-        flavor="${{ inputs.flavor }}"
-        expected_commit="${{ inputs.commit }}"
-        case "$flavor" in
+        case "$FLAVOR" in
           kernelsu)
             repo="https://github.com/tiann/KernelSU.git"
             directory="KernelSU"
@@ -31,8 +38,8 @@ runs:
             manager="KernelSU Next Manager"
             ;;
           resukisu)
-            repo="https://github.com/ReSukiSU/ReSukiSU.git"
-            directory="ReSukiSU"
+            repo="https://github.com/rsuntk/ResukiSU.git"
+            directory="ResukiSU"
             manager="ReSukiSU Manager"
             ;;
           sukisu-ultra)
@@ -41,68 +48,79 @@ runs:
             manager="SukiSU-Ultra Manager"
             ;;
           kowsu)
-            repo="https://github.com/KOWX712/KernelSU.git"
-            directory="KowSU"
-            manager="KowSU Manager"
+            repo="https://github.com/ShirkNeko/KernelSU.git"
+            directory="KernelSU"
+            manager="KOWSU Manager"
             ;;
           *)
-            echo "Unsupported root flavor: $flavor" >&2
-            exit 2
+            echo "Unsupported root flavor: $FLAVOR" >&2
+            exit 1
             ;;
         esac
 
-        if ! [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]]; then
-          echo "Root commit must be a full 40-character SHA." >&2
-          exit 2
-        fi
-
-        for candidate in KernelSU KernelSU-Next ReSukiSU SukiSU-Ultra KowSU; do
-          if [ "$candidate" != "$directory" ] && [ -e "$candidate" ]; then
-            echo "Refusing mixed root implementations: found $candidate." >&2
-            exit 1
-          fi
-        done
-
-        if [ -d common/drivers ]; then
-          drivers_dir="common/drivers"
-        elif [ -d drivers ]; then
-          drivers_dir="drivers"
-        else
-          echo "Kernel drivers directory not found." >&2
-          exit 1
-        fi
-
-        if [ -e "$drivers_dir/kernelsu" ] || [ -L "$drivers_dir/kernelsu" ]; then
-          echo "Refusing to replace an existing kernelsu integration." >&2
-          exit 1
-        fi
         if [ -e "$directory" ]; then
           echo "Refusing to reuse an existing root checkout: $directory." >&2
           exit 1
         fi
 
         git clone --no-checkout "$repo" "$directory"
-        git -C "$directory" fetch --depth=1 origin "$expected_commit"
-        git -C "$directory" checkout --detach "$expected_commit"
+        git -C "$directory" fetch --depth=1 origin "$EXPECTED_COMMIT"
+        git -C "$directory" checkout --detach "$EXPECTED_COMMIT"
+
         actual_commit="$(git -C "$directory" rev-parse HEAD)"
-        if [ "$actual_commit" != "$expected_commit" ]; then
-          echo "Root commit mismatch: expected $expected_commit, got $actual_commit." >&2
+        if [ "$actual_commit" != "$EXPECTED_COMMIT" ]; then
+          echo "Root commit mismatch: expected $EXPECTED_COMMIT, got $actual_commit." >&2
           exit 1
         fi
+
         if [ ! -f "$directory/kernel/Kconfig" ] || [ ! -f "$directory/kernel/Makefile" ]; then
           echo "Selected root checkout does not contain a kernel integration." >&2
           exit 1
         fi
+
+        # Pixel 8a (akita) workaround for SukiSU-Ultra.
+        #
+        # Pixel 8a can fail to let SukiSU Manager detect the built-in
+        # SukiSU-Ultra driver because the supercall FD is allocated with
+        # O_CLOEXEC. Upstream workaround is to allocate the FD without
+        # O_CLOEXEC.
+        #
+        # Apply this only to SukiSU-Ultra and only when the expected source
+        # line is present. This keeps the pinned commit unchanged.
+        if [ "$FLAVOR" = "sukisu-ultra" ]; then
+          supercall_file="$directory/kernel/supercall/supercall.c"
+
+          if [ ! -f "$supercall_file" ]; then
+            echo "SukiSU-Ultra supercall source not found: $supercall_file" >&2
+            exit 1
+          fi
+
+          grep -q 'fd = get_unused_fd_flags(O_CLOEXEC);' "$supercall_file" || {
+            echo "Expected SukiSU-Ultra Pixel 8a source line not found." >&2
+            exit 1
+          }
+
+          sed -i \
+            's/fd = get_unused_fd_flags(O_CLOEXEC);/fd = get_unused_fd_flags(0);/' \
+            "$supercall_file"
+
+          echo "Applied Pixel 8a SukiSU-Ultra supercall workaround."
+
+          grep -n -A2 -B2 'get_unused_fd_flags' "$supercall_file"
+        fi
+
         root_version="$(git -C "$directory" describe --tags --always --dirty)"
 
-        relative_kernel="$(realpath --relative-to="$drivers_dir" "$PWD/$directory/kernel")"
-        ln -s "$relative_kernel" "$drivers_dir/kernelsu"
-        grep -q 'obj-$(CONFIG_KSU) += kernelsu/' "$drivers_dir/Makefile" ||
-          printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$drivers_dir/Makefile"
-        grep -q 'source "drivers/kernelsu/Kconfig"' "$drivers_dir/Kconfig" ||
-          sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' "$drivers_dir/Kconfig"
+        relative_kernel="$(realpath --relative-to="$PWD/drivers" "$PWD/$directory/kernel")"
+        ln -s "$relative_kernel" "drivers/kernelsu"
 
-        echo "ROOT_IMPLEMENTATION=$flavor" >> "$GITHUB_ENV"
+        grep -q 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile ||
+          printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+
+        grep -q 'source "drivers/kernelsu/Kconfig"' Kconfig ||
+          sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' Kconfig
+
+        echo "ROOT_IMPLEMENTATION=$FLAVOR" >> "$GITHUB_ENV"
         echo "ROOT_MANAGER=$manager" >> "$GITHUB_ENV"
         echo "ROOT_VERSION=$root_version" >> "$GITHUB_ENV"
         echo "ROOT_COMMIT=$actual_commit" >> "$GITHUB_ENV"
@@ -113,24 +131,6 @@ runs:
         config_list: |
           CONFIG_KSU=y
 
-    - name: Soften KernelSU-Next Kbuild config guard for mrproper
-      if: inputs.flavor == 'next'
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        # Upstream Next's drivers/kernelsu/Kbuild hard-errors at parse time
-        # when neither CONFIG_KPROBES nor CONFIG_KSU_SUSFS is set. During
-        # build.sh's mrproper phase no .config exists yet, so the clean step
-        # dies before defconfig ever sets CONFIG_KSU_SUSFS=y. Demote to a
-        # warning: the message stays visible, and the real build still gets
-        # CONFIG_KSU_SUSFS=y via defconfig. No-op if upstream drops the guard.
-        for d in common/drivers/kernelsu drivers/kernelsu; do
-          if [ -f "$d/Kbuild" ] && grep -q 'KernelSU requires either CONFIG_KPROBES' "$d/Kbuild"; then
-            sed -i 's/$(error "KernelSU requires either CONFIG_KPROBES=y or CONFIG_KSU_SUSFS=y")/$(warning "KernelSU requires either CONFIG_KPROBES=y or CONFIG_KSU_SUSFS=y")/' "$d/Kbuild"
-            echo "Softened KSU config guard in $d/Kbuild"
-          fi
-        done
-
     - name: Disable multi-manager for ReSukiSU
       if: inputs.flavor == 'resukisu'
       uses: ./.github/actions/set-kernel-config
@@ -138,18 +138,4 @@ runs:
         config_list: |
           CONFIG_KSU_MULTI_MANAGER_SUPPORT=n
           CONFIG_KSU_TOOLKIT_SUPPORT=y
-
-    - name: Soften ReSukiSU Kbuild submodule check for bazel builds
-      if: inputs.flavor == 'resukisu'
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        # Fallback: demote the git submodule check from error to warning.
-        # Modify the Kbuild in the ReSukiSU checkout so the change propagates
-        # through the symlink into bazel sandbox.
-        for d in ReSukiSU/kernel; do
-          if [ -f "$d/Kbuild" ] && grep -q 'You should use \$(REPO_NAME) as a git submodule instead of copying code directly' "$d/Kbuild"; then
-            sed -i 's/\$(error You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/\$(warning You should use \$(REPO_NAME) as a git submodule instead of copying code directly)/' "$d/Kbuild"
-            echo "Softened ReSukiSU submodule check in $d/Kbuild"
-          fi
-        done
+```
