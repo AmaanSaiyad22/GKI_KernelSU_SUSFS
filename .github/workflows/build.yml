@@ -88,10 +88,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      # Must include every input that varies across matrix legs. Without
-      # sublevel/variant/page_size, several distinct builds collide on one key
-      # and, with cancel-in-progress: false, queue behind each other instead of
-      # running in parallel — one kernel compiles at a time.
       group: build-${{ inputs.root_flavor }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.os_patch_level }}-${{ inputs.variant }}${{ inputs.page_size }}
       cancel-in-progress: false
 
@@ -110,8 +106,6 @@ jobs:
           *) echo "ERROR: unsupported page_size '$PAGE_SIZE' (expected 4k or 16k)." >&2; exit 1 ;;
         esac
 
-        # Kleaf exposes --page_size only on the build branches used by these
-        # GKI families (main-kernel-build-2023/2024, main-kernel-2025).
         case "${{ inputs.version }}" in
           android14-6.1|android15-6.6|android16-6.12) ;;
           *)
@@ -166,8 +160,6 @@ jobs:
       shell: bash
       run: |
         set -x
-        # Hardcode the build timestamp to the 5th day of the patch level
-        # at 04:20 UTC, using the existing timestamp formats expected by the build.
         OS_PATCH_LEVEL_INPUT="${{ inputs.os_patch_level }}"
         if [[ "$OS_PATCH_LEVEL_INPUT" == lts* ]]; then
           if [[ "$OS_PATCH_LEVEL_INPUT" =~ ^lts-([0-9]{2})$ ]]; then
@@ -189,7 +181,6 @@ jobs:
         GIT_DATE=$(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%dT%H:%M:%SZ')
         echo "GIT_COMMITTER_DATE=${GIT_DATE}" >> $GITHUB_ENV
         echo "GIT_AUTHOR_DATE=${GIT_DATE}" >> $GITHUB_ENV
-
         echo "Build timestamp set to: $(date -u -d @${SOURCE_DATE_EPOCH} '+%Y-%m-%d %H:%M:%S UTC') (epoch: $SOURCE_DATE_EPOCH)"
 
     - name: Extract Sublevel and Set File Name
@@ -219,12 +210,18 @@ jobs:
         echo "ERROR: KowSU does not work together with SUSFS — re-run with SUSFS off." >&2
         exit 1
 
+    # IMPORTANT:
+    # root-setup/action.yml expects:
+    #   flavor
+    #   root_commit
+    #   source_dir
     - name: Setup Selected Root Implementation
       if: inputs.root_flavor != '' && inputs.root_flavor != 'none'
       uses: ./.github/actions/root-setup
       with:
         flavor: ${{ inputs.root_flavor }}
-        commit: ${{ inputs.root_commit }}
+        root_commit: ${{ inputs.root_commit }}
+        source_dir: ${{ github.workspace }}
 
     - name: Mark No Root build metadata
       if: inputs.root_flavor == 'none'
@@ -275,13 +272,11 @@ jobs:
       run: |
         set -euo pipefail
 
-        # KernelSU-Next uses the latest branch tip.
         if [ "${{ inputs.root_flavor }}" = "next" ]; then
           BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
           SUSFS_COMMIT="$(git ls-remote https://gitlab.com/simonpunk/susfs4ksu.git "refs/heads/${BRANCH}" | cut -f1)"
           echo "KernelSU-Next: resolving SUSFS at latest on ${BRANCH} -> ${SUSFS_COMMIT}"
 
-        # SukiSU-Ultra Android 14 / 6.1 uses the verified compatible SUSFS pin.
         elif [ "${{ inputs.root_flavor }}" = "sukisu-ultra" ] &&
              [ "${{ inputs.version }}" = "android14-6.1" ]; then
           SUSFS_COMMIT="ad0c6ce81fb67b67e64fc6d8a1bc8c0970e3438d"
@@ -427,8 +422,6 @@ jobs:
       if: false
       working-directory: ${{ github.workspace }}/kernel
       run: |
-        # ABI compare bypass per kernel/android version
-        # Edit each block as needed per version
         if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
           sed -i 's/^\s*exit 1$/    echo "Who Cares? Bypassing Now!"/' build/abi/compare_to_symbol_list
 
@@ -530,7 +523,7 @@ jobs:
         path: /home/runner/.cache/bazel
         key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
         restore-keys: |
-          bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
+          bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sublevel }}-
           bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-
           bazel-
 
