@@ -1,5 +1,5 @@
-name: Root setup
 
+name: Root setup
 description: Configure the selected root implementation
 
 inputs:
@@ -24,6 +24,13 @@ runs:
         EXPECTED_COMMIT: ${{ inputs.root_commit }}
       run: |
         set -euo pipefail
+
+        # Verify the Android kernel source root.
+        if [ ! -d "drivers" ] || [ ! -f "drivers/Makefile" ] || [ ! -f "Kconfig" ]; then
+          echo "ERROR: source_dir is not the Android kernel source root: $PWD" >&2
+          echo "Expected drivers/, drivers/Makefile, and Kconfig." >&2
+          exit 1
+        fi
 
         case "$FLAVOR" in
           kernelsu)
@@ -96,7 +103,6 @@ runs:
             "$supercall_file"
 
           echo "Applied Pixel 8a SukiSU-Ultra supercall workaround."
-
           grep -n -A2 -B2 'get_unused_fd_flags' "$supercall_file"
         fi
 
