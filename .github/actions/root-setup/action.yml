@@ -1,4 +1,4 @@
-
+```yaml
 name: Root setup
 description: Configure the selected root implementation
 
@@ -93,14 +93,20 @@ runs:
             exit 1
           fi
 
-          grep -q 'fd = get_unused_fd_flags(O_CLOEXEC);' "$supercall_file" || {
+          if ! grep -Fq 'fd = get_unused_fd_flags(O_CLOEXEC);' "$supercall_file"; then
             echo "Expected SukiSU-Ultra Pixel 8a source line not found." >&2
+            echo "Review the pinned SukiSU-Ultra source before changing this patch." >&2
             exit 1
-          }
+          fi
 
           sed -i \
             's/fd = get_unused_fd_flags(O_CLOEXEC);/fd = get_unused_fd_flags(0);/' \
             "$supercall_file"
+
+          if ! grep -Fq 'fd = get_unused_fd_flags(0);' "$supercall_file"; then
+            echo "Pixel 8a SukiSU-Ultra compatibility patch failed." >&2
+            exit 1
+          fi
 
           echo "Applied Pixel 8a SukiSU-Ultra supercall workaround."
           grep -n -A2 -B2 'get_unused_fd_flags' "$supercall_file"
@@ -135,3 +141,4 @@ runs:
         config_list: |
           CONFIG_KSU_MULTI_MANAGER_SUPPORT=n
           CONFIG_KSU_TOOLKIT_SUPPORT=y
+```
