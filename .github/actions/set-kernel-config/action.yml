@@ -9,49 +9,57 @@ inputs:
 runs:
   using: composite
   steps:
-  - name: Patch gki_defconfig
-    shell: bash
-    working-directory: ${{ github.workspace }}/kernel/common
-    run: |
-      set -euo pipefail
+    - name: Patch gki_defconfig
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        CONFIG_LIST: ${{ inputs.config_list }}
+      run: |
+        set -euo pipefail
 
-      DEFCONFIG="arch/arm64/configs/gki_defconfig"
-      CONFIG_LIST="${{ inputs.config_list }}"
+        DEFCONFIG="arch/arm64/configs/gki_defconfig"
 
-      if [ ! -f "$DEFCONFIG" ]; then
-        echo "ERROR: gki_defconfig not found"
-        exit 1
-      fi
-
-      apply_line() {
-        local line="$1"
-        line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-
-        # skip empty/comments
-        [[ -z "$line" || "$line" == \#* ]] && return
-
-        local key value
-        if [[ "$line" == *"="* ]]; then
-          key="${line%%=*}"
-          value="${line#*=}"
-        else
-          key="$line"
-          value="y"
+        if [ ! -f "$DEFCONFIG" ]; then
+          echo "ERROR: gki_defconfig not found: $DEFCONFIG" >&2
+          exit 1
         fi
 
-        echo "Processing: $key=$value"
+        apply_line() {
+          local line="$1"
+          line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
-        # if config exists anywhere in file → replace it
-        if grep -q "^$key=" "$DEFCONFIG"; then
-          sed -i "s|^$key=.*|$key=$value|g" "$DEFCONFIG"
-        elif grep -q "^# $key is not set" "$DEFCONFIG"; then
-          sed -i "s|^# $key is not set|$key=$value|g" "$DEFCONFIG"
-        else
-          # not present → append
-          echo "$key=$value" >> "$DEFCONFIG"
-        fi
-      }
+          # Skip empty lines and comments.
+          [[ -z "$line" || "$line" == \#* ]] && return 0
 
-      while IFS= read -r line || [ -n "$line" ]; do
-        apply_line "$line"
-      done <<< "$CONFIG_LIST"
+          local key value
+
+          if [[ "$line" == *"="* ]]; then
+            key="${line%%=*}"
+            value="${line#*=}"
+          else
+            key="$line"
+            value="y"
+          fi
+
+          # Validate the configuration key before using it in sed.
+          if [[ ! "$key" =~ ^CONFIG_[A-Za-z0-9_]+$ ]]; then
+            echo "ERROR: Invalid kernel config key: $key" >&2
+            exit 1
+          fi
+
+          echo "Processing: $key=$value"
+
+          if grep -q "^${key}=" "$DEFCONFIG"; then
+            sed -i "s|^${key}=.*|${key}=${value}|" "$DEFCONFIG"
+          elif grep -q "^# ${key} is not set$" "$DEFCONFIG"; then
+            sed -i "s|^# ${key} is not set$|${key}=${value}|" "$DEFCONFIG"
+          else
+            printf '%s=%s\n' "$key" "$value" >> "$DEFCONFIG"
+          fi
+        }
+
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          apply_line "$line"
+        done <<< "$CONFIG_LIST"
+
+        echo "Kernel configuration update completed."
